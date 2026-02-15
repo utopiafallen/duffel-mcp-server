@@ -689,7 +689,7 @@ class SessionStore:
         parsed["created_at"] = datetime.fromisoformat(parsed["created_at"])
         parsed["expires_at"] = datetime.fromisoformat(parsed["expires_at"])
         # Convert passenger dicts back to CheckoutPassenger objects
-        parsed["passengers"] = [CheckoutPassenger(**p) for p in parsed["passengers"]]
+        parsed["passengers"] = [CheckoutPassenger(**p) for p in parsed["passengers"]] if parsed.get("passengers") else None
         return CheckoutSession(**parsed)
 
     def save(self, session: CheckoutSession) -> None:
@@ -4042,7 +4042,9 @@ async def serve_static(request: Request) -> FileResponse:
     if ".." in filename or filename.startswith("/"):
         return JSONResponse({"error": "Invalid path"}, status_code=400)
 
-    file_path = STATIC_DIR / filename
+    file_path = (STATIC_DIR / filename).resolve()
+    if not file_path.is_relative_to(STATIC_DIR.resolve()):
+        return JSONResponse({"error": "Invalid path"}, status_code=400)
     if file_path.exists() and file_path.is_file():
         # Determine media type
         suffix = file_path.suffix.lower()
@@ -4226,7 +4228,8 @@ async def duffel_create_checkout(params: CreateCheckoutInput, ctx: Context) -> s
 async def duffel_get_booking_link(
     reference: Optional[str] = None,
     currency: str = "USD",
-    ctx: Context = None
+    *,
+    ctx: Context
 ) -> str:
     """
     Get a branded booking link where customers can search and book flights.
@@ -4354,7 +4357,7 @@ class ScannerProtectionMiddleware:
             else:
                 # Block expired
                 del self._blocked_ips[ip]
-                self._failed_counts.pop(ip, None)
+                self._scanner_hits.pop(ip, None)
         return False
 
     def _block_ip(self, ip: str):

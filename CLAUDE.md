@@ -8,9 +8,11 @@ Duffel MCP server that enables LLMs to search for flights, retrieve offers, and 
 
 ## Commands
 
+**Requires Python >= 3.10**
+
 ```bash
 # Install dependencies
-pip install fastmcp httpx pydantic starlette uvicorn redis
+pip install mcp httpx pydantic starlette uvicorn redis
 # Or with uv
 uv pip install -e duffel_mcp/
 
@@ -26,6 +28,9 @@ python duffel_mcp/server.py --debug
 # Test API key permissions
 DUFFEL_API_KEY_LIVE="your_key" python duffel_mcp/test_api_key.py
 
+# Test payment flow
+python duffel_mcp/test_payments.py
+
 # Docker build & run
 docker build -t duffel-mcp .
 docker run -p 8080:8080 -e DUFFEL_API_KEY_LIVE=xxx -e CHECKOUT_BASE_URL=http://localhost:8080 duffel-mcp
@@ -35,11 +40,12 @@ docker run -p 8080:8080 -e DUFFEL_API_KEY_LIVE=xxx -e CHECKOUT_BASE_URL=http://l
 
 ### Core Components (`duffel_mcp/server.py`)
 
-**Single-file server** (~3100 lines) containing:
+**Single-file server** (~4500 lines) containing:
 - Pydantic v2 input models for all tools
 - Optimization/scoring logic in `calculate_flight_score()`
-- 7 MCP tools, 4 resources, 3 prompts
+- 10 MCP tools, 4 resources, 3 prompts
 - Checkout flow with Duffel Payments integration
+- Scanner protection middleware for security
 
 **Key functions:**
 - `_make_api_request()`: Authenticated Duffel API calls
@@ -121,3 +127,4 @@ MCP client config is in `.mcp.json`.
 - Character limit: 25000 (responses truncated with `_truncate_if_needed()`)
 - SSE transport combines MCP routes with Starlette checkout routes via `Mount`
 - **FastMCP SSE API**: Use `mcp.http_app(transport="sse")` to get the ASGI app (not `sse_app()` which is deprecated)
+- `ScannerProtectionMiddleware` blocks vulnerability scanners and returns 403 for suspicious paths/user-agents
