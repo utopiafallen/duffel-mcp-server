@@ -1390,22 +1390,30 @@ User request
 └─ Searching for flights? → Step 2
 ```
 
-**Step 2: Is price the priority?**
+**Step 2: One-way or round-trip?**
 
 ```
-Price-focused? ("cheapest", "best deal", "most affordable", "budget")
-├─ YES, and dates are flexible
-│   └─ duffel_flexible_search (searches +/- 3 days automatically)
-│      Works for both one-way and round-trip
-├─ YES, and it's a round-trip
-│   └─ duffel_search_partial (mix-and-match airlines per leg)
-│      Often finds cheaper combos than bundled round-trips
-└─ NO (specific date, "find me flights", comparing options)
-    └─ duffel_search_flights
-       Works for one-way (1 slice), round-trip (2 slices), multi-city (3+ slices)
+ONE-WAY (1 slice):
+├─ Price-focused / flexible dates → duffel_flexible_search (omit return_date)
+└─ Specific date → duffel_search_flights (1 slice)
+⚠️ NEVER use duffel_search_partial for one-way — it requires 2+ slices
+
+ROUND-TRIP / MULTI-CITY (2+ slices):
+├─ Price-focused + flexible dates → duffel_flexible_search
+├─ Price-focused + fixed dates → duffel_search_partial (mix-and-match airlines)
+└─ Specific date / comparing options → duffel_search_flights
 ```
 
-**Step 3: Can you combine tools?**
+**Step 3: If a tool fails, fall back — don't give up!**
+
+```
+Tool error? → Try the next tool, NEVER fall back to web search
+├─ duffel_search_partial fails → use duffel_search_flights (always works)
+├─ duffel_flexible_search fails → use duffel_search_flights (single date)
+└─ duffel_search_flights fails → check error message, adjust params, retry
+```
+
+**Step 4: Can you combine tools?** (round-trips only)
 
 For the most thorough price search on round-trips:
 1. `duffel_flexible_search` → find cheapest dates
