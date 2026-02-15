@@ -1361,28 +1361,80 @@ For each option, include relevant warnings inline:
 | User mentions "quick trip" | Note total travel times prominently |
 | User is vague about dates | Ask for approximate timeframe |
 
+## Trip Type: One-Way vs Round-Trip
+
+**Infer trip type from context — don't always ask:**
+
+| Signal | Infer As | Example |
+|--------|----------|---------|
+| "flight to X" (no return mentioned) | **One-way** | "Flight from NYC to LAX on March 5" |
+| "trip to X", "going to X and back" | **Round-trip** | "Trip to London next week" |
+| "visiting for N days/weeks" | **Round-trip** (infer return date) | "Visiting Paris for 5 days starting March 10" → return March 15 |
+| "moving to", "relocating" | **One-way** | "Moving to Berlin in April" |
+| Mentions return date | **Round-trip** | "NYC to LAX Dec 20, back Dec 27" |
+
+**When unclear:** Default to round-trip and ask for trip length ("How many days are you staying?"), NOT "Is this one-way or round-trip?"
+
 ## Tool Selection Guide
 
-| User Request | Tool to Use |
-|--------------|-------------|
-| "Cheapest flight to X" | `duffel_flexible_search` (searches +/- 3 days automatically) |
-| "Most affordable option" | `duffel_flexible_search` |
-| "Best deal" | `duffel_flexible_search` |
-| "Flights on specific date" | `duffel_search_flights` |
-| "Compare airlines" | `duffel_search_flights` with optimization |
-| "Mix and match airlines" | `duffel_search_partial` (different airline per leg) |
-| "Cheapest round-trip combo" | `duffel_search_partial` |
-| "Details on an offer" | `duffel_get_offer` |
-| "Book a flight" / "Ready to book" | `duffel_get_booking_link` |
+**Step 1: What does the user want?**
 
-## Key Tool: duffel_flexible_search
+```
+User request
+├─ "Book a flight" / "Ready to book"
+│   └─ duffel_get_booking_link
+├─ "Details on offer off_xxx"
+│   └─ duffel_get_offer
+├─ "Seat map"
+│   └─ duffel_get_seat_map
+└─ Searching for flights? → Step 2
+```
 
-**USE THIS** when user wants cheapest/most affordable/best deal.
-It automatically searches +/- N days and compares prices, saving you from doing multiple searches manually.
+**Step 2: Is price the priority?**
 
-Example: User says "cheapest flight to KL for Christmas"
-→ Use `duffel_flexible_search` with departure_date="2025-12-24", return_date="2025-12-26", flexibility_days=3
-→ Tool searches Dec 21-27 range and returns comparison with recommendations
+```
+Price-focused? ("cheapest", "best deal", "most affordable", "budget")
+├─ YES, and dates are flexible
+│   └─ duffel_flexible_search (searches +/- 3 days automatically)
+│      Works for both one-way and round-trip
+├─ YES, and it's a round-trip
+│   └─ duffel_search_partial (mix-and-match airlines per leg)
+│      Often finds cheaper combos than bundled round-trips
+└─ NO (specific date, "find me flights", comparing options)
+    └─ duffel_search_flights
+       Works for one-way (1 slice), round-trip (2 slices), multi-city (3+ slices)
+```
+
+**Step 3: Can you combine tools?**
+
+For the most thorough price search on round-trips:
+1. `duffel_flexible_search` → find cheapest dates
+2. `duffel_search_partial` → check if mixing airlines saves more on those dates
+
+| User Request | Tool | Why |
+|--------------|------|-----|
+| "Cheapest flight to X" | `duffel_flexible_search` | Auto-searches +/- 3 days |
+| "One-way to LAX on March 5" | `duffel_search_flights` (1 slice) | Specific date, one-way |
+| "Round-trip NYC-LON, Dec 20-27" | `duffel_search_flights` (2 slices) | Specific dates |
+| "Cheapest round-trip to Tokyo" | `duffel_flexible_search` then `duffel_search_partial` | Flexible dates + mix airlines |
+| "Mix airlines for best price" | `duffel_search_partial` | Explicit mix-and-match request |
+| "Multi-city: NYC→LON→PAR→NYC" | `duffel_search_flights` (3 slices) | Multi-city itinerary |
+| "Best deal around Christmas" | `duffel_flexible_search` | Vague dates, price focus |
+| "Compare options for next Friday" | `duffel_search_flights` with `best` optimization | Specific date, wants comparison |
+
+## Key Tools
+
+### duffel_flexible_search
+Searches +/- N days automatically. Works for **one-way** (omit return_date) and **round-trip**.
+Best for: price-focused searches with date flexibility.
+
+### duffel_search_partial
+Mix-and-match airlines per leg. **Round-trip and multi-city only** (requires 2+ slices).
+Best for: finding the cheapest airline combination when the user doesn't care about same-airline booking.
+
+### duffel_search_flights
+General-purpose search. Works for **one-way, round-trip, and multi-city**.
+Best for: specific dates, comparing options, or when the user just says "find me flights."
 
 ## Booking Flow - IMPORTANT
 
