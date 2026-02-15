@@ -560,6 +560,40 @@ class FlexibleDateSearchInput(BaseModel):
     )
 
 
+class SearchPartialInput(BaseModel):
+    """Input for partial offer requests (mix-and-match legs from different airlines)."""
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
+
+    slices: List[FlightSlice] = Field(
+        ...,
+        description="Flight slices: must have at least 2 for mix-and-match (e.g., outbound + return)",
+        min_length=2,
+        max_length=4
+    )
+    passengers: List[PassengerInput] = Field(
+        default=[PassengerInput(type=PassengerType.ADULT)],
+        description="List of passengers (defaults to 1 adult)",
+        min_length=1,
+        max_length=9
+    )
+    cabin_class: Optional[CabinClass] = Field(
+        default=CabinClass.ECONOMY,
+        description="Cabin class preference"
+    )
+    max_connections: Optional[int] = Field(
+        default=None,
+        description="Maximum connections per slice (0 for non-stop only)",
+        ge=0,
+        le=3
+    )
+    top_n: Optional[int] = Field(
+        default=5,
+        description="Number of top options to show per leg",
+        ge=1,
+        le=20
+    )
+
+
 # ============================================================================
 # Checkout Flow Models and Session Storage
 # ============================================================================
@@ -964,6 +998,41 @@ def _format_fare_conditions_brief(offer: Dict[str, Any]) -> str:
         parts.append("Changeable")
     return " | ".join(parts) if parts else "Conditions unknown"
 
+def _layover_quality_score(offer: Dict[str, Any]) -> float:
+    """Score layover quality (0-1, higher is better). Direct flights = 1.0."""
+    connection_scores = []
+    for slice_data in offer.get("slices", []):
+        segments = slice_data.get("segments", [])
+        for i in range(len(segments) - 1):
+            try:
+                arr = datetime.fromisoformat(segments[i].get("arriving_at", "").replace("Z", "+00:00"))
+                dep = datetime.fromisoformat(segments[i + 1].get("departing_at", "").replace("Z", "+00:00"))
+                conn_minutes = (dep - arr).total_seconds() / 60
+            except (ValueError, TypeError):
+                connection_scores.append(0.5)
+                continue
+
+            if conn_minutes < 45:
+                score = 0.2
+            elif conn_minutes < 60:
+                score = 0.5
+            elif conn_minutes < 90:
+                score = 0.9
+            elif conn_minutes <= 180:
+                score = 1.0
+            elif conn_minutes <= 300:
+                score = 0.7
+            elif conn_minutes <= 480:
+                score = 0.4
+            else:
+                score = 0.2
+            connection_scores.append(score)
+
+    if not connection_scores:
+        return 1.0  # Direct flight
+    return sum(connection_scores) / len(connection_scores)
+
+
 def _count_stops(offer: Dict[str, Any]) -> int:
     """Count total stops across all slices."""
     total_stops = 0
@@ -995,6 +1064,8 @@ def _normalize(value: float, min_val: float, max_val: float) -> float:
 def _calculate_time_preference_score(hour: int, preference: Optional[str]) -> float:
     """Score departure time based on preference (0-1, higher is better)."""
     if not preference:
+        if 0 <= hour < 5:
+            return 0.3  # Red-eye penalty
         return 0.5  # Neutral
 
     ranges = {
@@ -1037,7 +1108,9 @@ def calculate_flight_score(
 
     # Normalize (invert so lower is better becomes higher score)
     price_score = 1 - _normalize(price, min(prices), max(prices)) if prices else 0.5
-    duration_score = 1 - _normalize(duration, min(durations), max(durations)) if durations else 0.5
+    raw_duration_score = 1 - _normalize(duration, min(durations), max(durations)) if durations else 0.5
+    layover_score = _layover_quality_score(offer)
+    duration_score = 0.7 * raw_duration_score + 0.3 * layover_score
     stops_score = 1 - _normalize(stops, min(stops_list), max(stops_list)) if stops_list else 0.5
     time_score = _calculate_time_preference_score(departure_hour, preferred_departure)
 
@@ -1216,6 +1289,34 @@ Instead, be proactive: search comprehensively and present findings with smart ad
 - Cabin class: Default to economy unless they mention otherwise
 - Airline preferences: Show what's available, note if budget carrier
 
+## City Codes: Search All Airports at Once
+
+When the user mentions a city (not a specific airport), use the **city IATA code** to search all airports:
+
+| City | Code | Airports Covered |
+|------|------|-----------------|
+| New York | NYC | JFK, EWR, LGA |
+| London | LON | LHR, LGW, STN, LTN, SEN |
+| Paris | PAR | CDG, ORY |
+| Tokyo | TYO | NRT, HND |
+| Chicago | CHI | ORD, MDW |
+| Washington DC | WAS | IAD, DCA, BWI |
+| Milan | MIL | MXP, LIN |
+| Rome | ROM | FCO, CIA |
+| Seoul | SEL | ICN, GMP |
+| Shanghai | SHA | PVG, SHA |
+| Buenos Aires | BUE | EZE, AEP |
+| Sao Paulo | SAO | GRU, CGH |
+| Stockholm | STO | ARN, BMA |
+| Moscow | MOW | SVO, DME, VKO |
+
+**Examples:**
+- User says "flights from New York" → search with origin `NYC`
+- User says "flights from JFK" → search with origin `JFK` (they specified)
+- User says "flights to London" → search with destination `LON`
+
+This finds cheaper options the user might miss if you only search one airport.
+
 ## Proactive Search Strategy
 
 When user wants the "cheapest" or "best deal":
@@ -1269,6 +1370,8 @@ For each option, include relevant warnings inline:
 | "Best deal" | `duffel_flexible_search` |
 | "Flights on specific date" | `duffel_search_flights` |
 | "Compare airlines" | `duffel_search_flights` with optimization |
+| "Mix and match airlines" | `duffel_search_partial` (different airline per leg) |
+| "Cheapest round-trip combo" | `duffel_search_partial` |
 | "Details on an offer" | `duffel_get_offer` |
 | "Book a flight" / "Ready to book" | `duffel_get_booking_link` |
 
@@ -2756,6 +2859,211 @@ async def duffel_flexible_search(params: FlexibleDateSearchInput, ctx: Context) 
 
     except Exception as e:
         logger.error("Flexible search error: %s", str(e))
+        return _handle_api_error(e, ctx)
+
+
+@mcp.tool(
+    name="duffel_search_partial",
+    annotations={
+        "title": "Mix & Match Flight Search",
+        "readOnlyHint": False,
+        "destructiveHint": False,
+        "idempotentHint": False,
+        "openWorldHint": True
+    }
+)
+async def duffel_search_partial(params: SearchPartialInput, ctx: Context) -> str:
+    """
+    Search for flights with mix-and-match legs from different airlines.
+
+    USE THIS TOOL when the user wants the cheapest round-trip combination and is open
+    to flying different airlines on each leg. This uses Duffel's partial offer request
+    API which returns per-leg pricing, allowing you to combine the cheapest outbound
+    from one airline with the cheapest return from another.
+
+    This is better than regular search when:
+    - User wants the absolute cheapest round-trip
+    - User is flexible about airlines
+    - User says "mix and match" or "different airlines each way"
+
+    Args:
+        params: Slices (2+ for round-trip/multi-city), passengers, cabin class, connection limits
+
+    Returns:
+        Per-leg options with prices, plus the cheapest combined total.
+    """
+    try:
+        route_summary = " -> ".join([f"{s.origin}->{s.destination}" for s in params.slices])
+        logger.info("Partial offer search: %s, %d passengers", route_summary, len(params.passengers))
+
+        await ctx.report_progress(0.1, "Preparing partial offer request...")
+
+        # Build request payload
+        slices_data = []
+        for slice_data in params.slices:
+            slice_obj = {
+                "origin": slice_data.origin.upper(),
+                "destination": slice_data.destination.upper(),
+                "departure_date": slice_data.departure_date
+            }
+            if slice_data.departure_time:
+                slice_obj["departure_time"] = {
+                    "from": slice_data.departure_time.from_time,
+                    "to": slice_data.departure_time.to_time
+                }
+            if slice_data.arrival_time:
+                slice_obj["arrival_time"] = {
+                    "from": slice_data.arrival_time.from_time,
+                    "to": slice_data.arrival_time.to_time
+                }
+            slices_data.append(slice_obj)
+
+        passengers_data = [
+            {"type": p.type.value} if p.type else {"age": p.age}
+            for p in params.passengers
+        ]
+
+        request_data = {
+            "data": {
+                "slices": slices_data,
+                "passengers": passengers_data,
+                "cabin_class": params.cabin_class.value if params.cabin_class else "economy"
+            }
+        }
+
+        if params.max_connections is not None:
+            request_data["data"]["max_connections"] = params.max_connections
+
+        await ctx.report_progress(0.3, "Searching for mix-and-match options...")
+
+        response = await _make_api_request(
+            ctx,
+            "air/partial_offer_requests",
+            method="POST",
+            json_data=request_data
+        )
+
+        await ctx.report_progress(0.7, "Analyzing per-leg options...")
+
+        data = response.get("data", {})
+        offers = data.get("offers", [])
+
+        if not offers:
+            return "No partial offers found. Try adjusting dates, airports, or removing connection limits."
+
+        # Group partial offers by slice
+        # Each offer has slices, and each slice has segments with pricing
+        slice_options: Dict[int, List[Dict[str, Any]]] = {}
+        for i in range(len(params.slices)):
+            slice_options[i] = []
+
+        for offer in offers:
+            offer_slices = offer.get("slices", [])
+            total_amount = float(offer.get("total_amount", "0"))
+            currency = offer.get("total_currency", "USD")
+            airline = offer.get("owner", {}).get("name", "Unknown")
+            offer_id = offer.get("id", "")
+
+            # For partial offers, extract per-slice info
+            for i, offer_slice in enumerate(offer_slices):
+                if i >= len(params.slices):
+                    break
+
+                segments = offer_slice.get("segments", [])
+                if not segments:
+                    continue
+
+                first_seg = segments[0]
+                last_seg = segments[-1]
+                dep_time = first_seg.get("departing_at", "")[:16].replace("T", " ")
+                arr_time = last_seg.get("arriving_at", "")[:16].replace("T", " ")
+                stops = len(segments) - 1
+                duration = offer_slice.get("duration", "N/A")
+
+                slice_options[i].append({
+                    "offer_id": offer_id,
+                    "price": total_amount,
+                    "currency": currency,
+                    "airline": airline,
+                    "departure": dep_time,
+                    "arrival": arr_time,
+                    "stops": stops,
+                    "duration": duration,
+                    "baggage": _extract_baggage_info(offer),
+                })
+
+        # Sort each slice's options by price
+        for i in slice_options:
+            slice_options[i].sort(key=lambda x: x["price"])
+
+        await ctx.report_progress(0.9, "Formatting results...")
+
+        # Build response
+        lines = ["# Mix & Match Flight Search\n"]
+        lines.append(f"**Route**: {route_summary}")
+        lines.append(f"**Passengers**: {len(params.passengers)}")
+        lines.append(f"**Total offers analyzed**: {len(offers)}\n")
+
+        # Per-slice tables
+        slice_cheapest = []
+        for i, slice_input in enumerate(params.slices):
+            options = slice_options.get(i, [])
+            leg_label = f"{slice_input.origin.upper()} → {slice_input.destination.upper()} ({slice_input.departure_date})"
+            lines.append(f"## Leg {i + 1}: {leg_label}\n")
+
+            if not options:
+                lines.append("No options found for this leg.\n")
+                continue
+
+            # Deduplicate by offer_id (take first/cheapest)
+            seen_offers = set()
+            unique_options = []
+            for opt in options:
+                if opt["offer_id"] not in seen_offers:
+                    seen_offers.add(opt["offer_id"])
+                    unique_options.append(opt)
+
+            display_count = min(len(unique_options), params.top_n or 5)
+            lines.append("| # | Price | Airline | Departure | Arrival | Stops | Baggage |")
+            lines.append("|---|-------|---------|-----------|---------|-------|---------|")
+
+            for j, opt in enumerate(unique_options[:display_count], 1):
+                stop_text = "direct" if opt["stops"] == 0 else f"{opt['stops']} stop(s)"
+                lines.append(
+                    f"| {j} | {opt['currency']} {opt['price']:.2f} | {opt['airline']} | "
+                    f"{opt['departure']} | {opt['arrival']} | {stop_text} | {opt['baggage']} |"
+                )
+
+            lines.append("")
+
+            if unique_options:
+                slice_cheapest.append(unique_options[0])
+
+        # Best combination
+        if len(slice_cheapest) == len(params.slices):
+            total_cheapest = sum(opt["price"] for opt in slice_cheapest)
+            currency = slice_cheapest[0]["currency"]
+            lines.append("## 🏆 Cheapest Combination\n")
+            lines.append(f"**Total: {currency} {total_cheapest:.2f}**\n")
+            for i, opt in enumerate(slice_cheapest):
+                lines.append(f"- Leg {i + 1}: {opt['airline']} at {currency} {opt['price']:.2f}")
+
+            # Check if all legs are same airline
+            airlines = set(opt["airline"] for opt in slice_cheapest)
+            if len(airlines) > 1:
+                lines.append(f"\n💡 **Mix & match**: Different airlines per leg for the best price.")
+            else:
+                lines.append(f"\n✈️ **Same airline** ({airlines.pop()}) is cheapest for all legs.")
+
+        lines.append(f"\n*Use offer IDs with `duffel_get_offer` for full details, or `duffel_get_booking_link` to book.*")
+
+        await ctx.report_progress(1.0, "Done")
+        logger.info("Partial search complete: %d offers, %d slices", len(offers), len(params.slices))
+
+        result = "\n".join(lines)
+        return _truncate_if_needed(result, "partial offers")
+
+    except Exception as e:
         return _handle_api_error(e, ctx)
 
 

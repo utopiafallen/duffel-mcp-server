@@ -43,7 +43,7 @@ docker run -p 8080:8080 -e DUFFEL_API_KEY_LIVE=xxx -e CHECKOUT_BASE_URL=http://l
 **Single-file server** (~4500 lines) containing:
 - Pydantic v2 input models for all tools
 - Optimization/scoring logic in `calculate_flight_score()`
-- 10 MCP tools, 4 resources, 3 prompts
+- 11 MCP tools, 4 resources, 3 prompts
 - Checkout flow with Duffel Payments integration
 - Scanner protection middleware for security
 
