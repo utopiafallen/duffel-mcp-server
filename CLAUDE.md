@@ -31,6 +31,9 @@ DUFFEL_API_KEY_LIVE="your_key" python duffel_mcp/test_api_key.py
 # Test payment flow
 python duffel_mcp/test_payments.py
 
+# Quick validation (syntax + import check)
+python -c "import duffel_mcp.server; print(f'{len(duffel_mcp.server.mcp._tool_manager._tools)} tools loaded')"
+
 # Docker build & run
 docker build -t duffel-mcp .
 docker run -p 8080:8080 -e DUFFEL_API_KEY_LIVE=xxx -e CHECKOUT_BASE_URL=http://localhost:8080 duffel-mcp
@@ -90,13 +93,15 @@ The `optimization` parameter accepts: `none`, `cheapest`, `fastest`, `least_stop
 
 The `best` strategy uses weighted scoring (default weights):
 - Price: 0.4, Duration: 0.3, Stops: 0.2, Departure Time: 0.1
+- Duration weight (0.3) includes layover quality scoring (70% travel time, 30% connection quality)
+- Red-eye flights (midnight-5AM) get a small default penalty when no time preference is set
 
 ### MCP Resources
 
 - `duffel://airlines` - All available airlines
 - `duffel://airlines/{iata_code}` - Single airline by code
 - `duffel://places/{query}` - Airport/city search
-- `duffel://instructions` - AI agent guidelines for smart travel assistance
+- `duffel://instructions` - AI agent guidelines for smart travel assistance (**most critical** - controls LLM tool selection and search behavior)
 
 ## Configuration
 
@@ -128,3 +133,5 @@ MCP client config is in `.mcp.json`.
 - SSE transport combines MCP routes with Starlette checkout routes via `Mount`
 - **FastMCP SSE API**: Use `mcp.http_app(transport="sse")` to get the ASGI app (not `sse_app()` which is deprecated)
 - `ScannerProtectionMiddleware` blocks vulnerability scanners and returns 403 for suspicious paths/user-agents
+- `duffel_search_partial` requires 2+ slices (round-trip/multi-city only, NOT one-way)
+- Check Railway build/deploy logs via `mcp__Railway__get-logs` tool
