@@ -22,13 +22,14 @@ import sys
 import json
 import re
 import logging
+import math
 import uuid
 from typing import Optional, List, Dict, Any, TypedDict, Tuple, Union
 from enum import Enum
 from datetime import datetime, timedelta
 from contextlib import asynccontextmanager
 import httpx
-from pydantic import BaseModel, Field, field_validator, ConfigDict
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 from fastmcp import FastMCP, Context
 
 # Starlette for checkout HTTP routes
@@ -201,7 +202,7 @@ class OptimizationWeights(BaseModel):
 
 class TimeRange(BaseModel):
     """Time range for departure/arrival filtering."""
-    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True, populate_by_name=True)
 
     from_time: str = Field(
         ...,
@@ -216,7 +217,6 @@ class TimeRange(BaseModel):
         pattern=r'^([0-1]?[0-9]|2[0-3]):[0-5][0-9]$'
     )
 
-    model_config = ConfigDict(populate_by_name=True)
 
 class FlightSlice(BaseModel):
     """A flight slice representing one leg of a journey."""
@@ -633,6 +633,155 @@ class CreateCheckoutInput(BaseModel):
     )
 
 
+class StaysGuestInput(BaseModel):
+    """Guest type for stay search."""
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
+
+    type: str = Field(
+        ...,
+        description="Guest type: 'adult' or 'child'",
+        pattern=r'^(adult|child)$'
+    )
+    age: Optional[int] = Field(
+        default=None,
+        description="Age of child guest (required if type is 'child', must be 0-17)",
+        ge=0,
+        le=17
+    )
+
+    @field_validator('age')
+    @classmethod
+    def validate_child_age(cls, v: Optional[int], info) -> Optional[int]:
+        """Child guests must have an age specified."""
+        if info.data.get('type') == 'child' and v is None:
+            raise ValueError("Age is required for child guests")
+        return v
+
+
+class StaysLocationInput(BaseModel):
+    """Geographic location for stay search."""
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
+
+    latitude: float = Field(
+        ...,
+        description="Latitude of the search center point (e.g., 51.5071 for London)",
+        ge=-90,
+        le=90
+    )
+    longitude: float = Field(
+        ...,
+        description="Longitude of the search center point (e.g., -0.1416 for London)",
+        ge=-180,
+        le=180
+    )
+    radius: int = Field(
+        default=5,
+        description="Search radius in kilometers from the center point",
+        ge=1,
+        le=50
+    )
+
+
+class StaysOptimizationWeights(BaseModel):
+    """Weights for the 'recommended' optimization strategy."""
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
+
+    price: float = Field(
+        default=0.3,
+        ge=0, le=1,
+        description="Weight for price (0-1). Higher = cheaper properties ranked higher."
+    )
+    rating: float = Field(
+        default=0.2,
+        ge=0, le=1,
+        description="Weight for star rating (0-1). Higher = more stars ranked higher."
+    )
+    review_score: float = Field(
+        default=0.3,
+        ge=0, le=1,
+        description="Weight for review score with confidence weighting (0-1)."
+    )
+    review_count: float = Field(
+        default=0.2,
+        ge=0, le=1,
+        description="Weight for number of reviews (0-1). Higher = more reviews ranked higher."
+    )
+
+
+class SearchStaysInput(BaseModel):
+    """Input model for searching accommodation."""
+    model_config = ConfigDict(str_strip_whitespace=True, validate_assignment=True)
+
+    location: StaysLocationInput = Field(
+        ...,
+        description="Search by geographic area (lat/lon + radius)"
+    )
+    check_in_date: str = Field(
+        ...,
+        description="Check-in date in YYYY-MM-DD format (max 330 days in the future)",
+        pattern=r'^\d{4}-\d{2}-\d{2}$'
+    )
+    num_nights: int = Field(
+        ...,
+        description="Number of nights to stay",
+        ge=1,
+        le=99
+    )
+    guests: List[StaysGuestInput] = Field(
+        ...,
+        description="List of guests (at least 1 required)",
+        min_length=1,
+        max_length=10
+    )
+    rooms: int = Field(
+        default=1,
+        description="Number of rooms required",
+        ge=1,
+        le=10
+    )
+    free_cancellation_only: bool = Field(
+        default=False,
+        description="Only return rates with free cancellation"
+    )
+    instant_payment: Optional[bool] = Field(
+        default=None,
+        description="True for pay-now rates only, false for pay-at-hotel rates only. Omit for all rates."
+    )
+    min_rating: Optional[int] = Field(
+        default=None,
+        description="Minimum star rating to include (1-5). Applied as client-side filter.",
+        ge=1,
+        le=5
+    )
+    max_rating: Optional[int] = Field(
+        default=None,
+        description="Maximum star rating to include (1-5). Applied as client-side filter.",
+        ge=1,
+        le=5
+    )
+    optimization: str = Field(
+        default="recommended",
+        description="Sort strategy: 'cheapest', 'best_reviewed', 'most_reviewed', 'recommended'. Default: 'recommended'.",
+        pattern=r"^(cheapest|best_reviewed|most_reviewed|recommended)$"
+    )
+    optimization_weights: Optional[StaysOptimizationWeights] = Field(
+        default=None,
+        description="Custom weights for 'recommended' strategy. Defaults: price=0.3, rating=0.2, review_score=0.3, review_count=0.2."
+    )
+    response_format: ResponseFormat = Field(
+        default=ResponseFormat.MARKDOWN,
+        description="Output format: 'markdown' or 'json'"
+    )
+
+    @model_validator(mode='after')
+    def validate_rating_range(self) -> 'SearchStaysInput':
+        """min_rating must not exceed max_rating when both are set."""
+        if (self.min_rating is not None and self.max_rating is not None
+                and self.min_rating > self.max_rating):
+            raise ValueError("'min_rating' must be <= 'max_rating'")
+        return self
+
+
 class CheckoutSession(BaseModel):
     """Stored checkout session data."""
     session_id: str
@@ -751,7 +900,7 @@ class SessionStore:
                 if data:
                     session = self._deserialize_session(data)
                     # Redis TTL handles expiry, but double-check
-                    if session.expires_at < datetime.utcnow():
+                    if session.expires_at < datetime.now(timezone.utc):
                         self.delete(session_id)
                         return None
                     return session
@@ -761,7 +910,7 @@ class SessionStore:
                 return self._memory_store.get(session_id)
         else:
             session = self._memory_store.get(session_id)
-            if session and session.expires_at < datetime.utcnow():
+            if session and session.expires_at < datetime.now(timezone.utc):
                 session.status = "expired"
                 del self._memory_store[session_id]
                 return None
@@ -858,7 +1007,7 @@ def _handle_api_error(e: Exception, ctx: Optional[Context] = None) -> str:
                 code = error.get("code", "unknown")
                 error_message = f"Error ({status}): {message} [Code: {code}]"
                 logger.error("API error %s: %s [%s]", status, message, code)
-        except:
+        except (json.JSONDecodeError, KeyError, TypeError):
             pass
 
         if not error_message:
@@ -1265,7 +1414,7 @@ def flight_search_instructions() -> str:
     Includes current date/time for context.
     """
     # Get current date/time for the AI
-    now = datetime.utcnow()
+    now = datetime.now(timezone.utc)
     current_date = now.strftime("%Y-%m-%d")
     current_time = now.strftime("%H:%M UTC")
     current_year = now.year
@@ -2327,7 +2476,6 @@ def _infer_seat_position(designator: str, aisles: int, all_letters_in_cabin: Lis
     Returns:
         Position string: "Window", "Aisle", "Middle", or "Unknown"
     """
-    import re
     match = re.match(r'^(\d+)([A-Z])$', designator.upper())
     if not match:
         return "Unknown"
@@ -2380,7 +2528,6 @@ def _infer_seat_position(designator: str, aisles: int, all_letters_in_cabin: Lis
 
 def _parse_seat_row_number(designator: str) -> int:
     """Extract row number from seat designator."""
-    import re
     match = re.match(r'^(\d+)', designator)
     return int(match.group(1)) if match else 0
 
@@ -2486,7 +2633,6 @@ async def duffel_get_seat_map(params: GetSeatMapInput, ctx: Context) -> str:
                             if element.get("type") == "seat":
                                 designator = element.get("designator", "?")
                                 # Extract letter for layout analysis
-                                import re
                                 letter_match = re.search(r'([A-Z])$', designator.upper())
                                 if letter_match:
                                     all_letters.add(letter_match.group(1))
@@ -2580,7 +2726,7 @@ async def duffel_get_seat_map(params: GetSeatMapInput, ctx: Context) -> str:
 
                     row_seats = sorted(rows_with_seats[row_num], key=lambda x: x["designator"])
                     seats_str = ", ".join([f"{s['designator']} ({s['position'][0]})" for s in row_seats])
-                    prices_str = ", ".join([f"${s['price']:.0f}" for s in row_seats])
+                    prices_str = ", ".join([f"{currency} {s['price']:.0f}" for s in row_seats])
 
                     # Collect notes
                     notes = set()
@@ -2701,6 +2847,294 @@ async def duffel_list_airlines(params: ListAirlinesInput, ctx: Context) -> str:
     except Exception as e:
         return _handle_api_error(e, ctx)
 
+
+@mcp.tool(
+    name="duffel_search_stays",
+    annotations={
+        "title": "Search Hotels & Accommodation",
+        "readOnlyHint": True,
+        "destructiveHint": False,
+        "idempotentHint": True,
+        "openWorldHint": True
+    }
+)
+async def duffel_search_stays(params: SearchStaysInput, ctx: Context) -> str:
+    """
+    Search for hotels and accommodation using the Duffel Stays API.
+
+    NOTE: Your DUFFEL_API_KEY_LIVE must have Stays permissions enabled.
+    This is a separate opt-in from the flight API — request access at
+    https://duffel.com/contact-us if you haven't already.
+
+    The tool requires lat/lon coordinates. The LLM should provide these from
+    its own knowledge (e.g., London ≈ 51.5074, -0.1278). The
+    duffel://places/{query} resource only returns airport IATA codes and
+    cannot be used for hotel search coordinates.
+
+    This tool returns a list of accommodations with their cheapest available
+    rate. To see full room options and rate details, use duffel_get_stay_rates
+    with the search_result_id from this response.
+
+    Args:
+        params (SearchStaysInput): Validated input parameters containing:
+            - location: Geographic search center (lat/lon + radius in km)
+            - check_in_date: Check-in date (YYYY-MM-DD, max 330 days future)
+            - num_nights: Number of nights to stay (1-99)
+            - guests: List of guests (adult or child with age)
+            - rooms: Number of rooms (default: 1)
+            - free_cancellation_only: Only free cancellation rates (default: false)
+            - instant_payment: True=pay-now, false=pay-at-hotel, omit=all
+            - min_rating: Minimum star rating filter (1-5)
+            - max_rating: Maximum star rating filter (1-5)
+            - optimization: Sort strategy — 'cheapest', 'best_reviewed', 'most_reviewed', 'recommended' (default)
+            - optimization_weights: Custom weights for 'recommended' strategy
+            - response_format: 'markdown' or 'json'
+        ctx (Context): MCP context for progress reporting
+
+    Returns:
+        str: Formatted list of accommodations with prices and search_result_ids
+
+    Examples:
+        - "Find hotels in London for 2 adults, June 4-7"
+          (location: lat=51.5071, lon=-0.1416, radius=5)
+        - "Search hotels near Eiffel Tower for 1 room, 3 guests"
+        - "Find accommodation with free cancellation in Tokyo"
+        - "Find best-reviewed 4+ star hotels in Paris" (min_rating=4, optimization='best_reviewed')
+    """
+    try:
+        await ctx.report_progress(0.1, "Validating search parameters...")
+
+        # Compute check-out date from num_nights
+        check_in = datetime.strptime(params.check_in_date, "%Y-%m-%d")
+        check_out_date = (check_in + timedelta(days=params.num_nights)).strftime("%Y-%m-%d")
+
+        # Build request payload
+        request_data: Dict[str, Any] = {
+            "data": {
+                "rooms": params.rooms,
+                "check_in_date": params.check_in_date,
+                "check_out_date": check_out_date,
+                "guests": [
+                    {"type": g.type, "age": g.age} if g.age is not None
+                    else {"type": g.type}
+                    for g in params.guests
+                ],
+                "free_cancellation_only": params.free_cancellation_only
+            }
+        }
+
+        # Add location (required)
+        request_data["data"]["location"] = {
+            "radius": params.location.radius,
+            "geographic_coordinates": {
+                "latitude": params.location.latitude,
+                "longitude": params.location.longitude
+            }
+        }
+
+        # Optional instant_payment filter
+        if params.instant_payment is not None:
+            request_data["data"]["instant_payment"] = params.instant_payment
+
+        # Log search request
+        location_desc = f"({params.location.latitude}, {params.location.longitude}, r={params.location.radius}km)"
+        logger.info(
+            "Stay search: %s, %s (%d nights), %d guest(s), %d room(s)",
+            location_desc,
+            params.check_in_date,
+            params.num_nights,
+            len(params.guests),
+            params.rooms
+        )
+
+        await ctx.report_progress(0.3, "Searching for accommodation...")
+
+        response = await _make_api_request(
+            ctx,
+            "stays/search",
+            method="POST",
+            json_data=request_data
+        )
+
+        # Client-side star rating filter (API has no server-side rating filter)
+        data = response.get("data", {})
+        results = data.get("results", [])
+        if params.min_rating is not None or params.max_rating is not None:
+            original_count = len(results)
+            filtered = []
+            for r in results:
+                rating = r.get("accommodation", {}).get("rating")
+                effective_rating = rating if rating is not None else 1  # unrated → 1★
+                if params.min_rating is not None and effective_rating < params.min_rating:
+                    continue
+                if params.max_rating is not None and effective_rating > params.max_rating:
+                    continue
+                filtered.append(r)
+            results = filtered
+            data["results"] = results
+            logger.info("Rating filter: %d -> %d results", original_count, len(results))
+
+        # Client-side optimization/sorting (API returns unsorted)
+        if results:
+            weights = params.optimization_weights or StaysOptimizationWeights()
+
+            if params.optimization == "cheapest":
+                def sort_key(r):
+                    price_str = r.get("cheapest_rate_total_amount")
+                    try:
+                        return float(price_str) if price_str else float('inf')
+                    except (ValueError, TypeError):
+                        return float('inf')
+                results.sort(key=sort_key)
+
+            elif params.optimization == "best_reviewed":
+                def sort_key(r):
+                    score = r.get("accommodation", {}).get("review_score") or 0
+                    count = r.get("accommodation", {}).get("review_count") or 0
+                    return score * math.log(count + 1)
+                results.sort(key=sort_key, reverse=True)
+
+            elif params.optimization == "most_reviewed":
+                def sort_key(r):
+                    return r.get("accommodation", {}).get("review_count") or 0
+                results.sort(key=sort_key, reverse=True)
+
+            elif params.optimization == "recommended":
+                # Normalize each factor to 0-1 range across all results
+                prices = []
+                ratings = []
+                scores = []
+                counts = []
+                for r in results:
+                    acc = r.get("accommodation", {})
+                    try:
+                        p = float(r.get("cheapest_rate_total_amount") or 0)
+                    except (ValueError, TypeError):
+                        p = 0
+                    prices.append(p)
+                    ratings.append(acc.get("rating") if acc.get("rating") is not None else 1)
+                    scores.append(acc.get("review_score") or 0)
+                    counts.append(acc.get("review_count") or 0)
+
+                min_p, max_p = min(prices), max(prices)
+                min_r, max_r = min(ratings), max(ratings)
+                min_s, max_s = min(scores), max(scores)
+                min_c, max_c = min(counts), max(counts)
+
+                def normalize(val, mn, mx):
+                    return (val - mn) / (mx - mn) if mx > mn else 0.5
+
+                def sort_key(r):
+                    acc = r.get("accommodation", {})
+                    try:
+                        p = float(r.get("cheapest_rate_total_amount") or 0)
+                    except (ValueError, TypeError):
+                        p = 0
+                    rt = acc.get("rating") if acc.get("rating") is not None else 1
+                    sc = acc.get("review_score") or 0
+                    ct = acc.get("review_count") or 0
+                    # Price: lower is better → invert
+                    n_price = 1.0 - normalize(p, min_p, max_p)
+                    n_rating = normalize(rt, min_r, max_r)
+                    n_score = sc * math.log(ct + 1) / (max_s * math.log(max_c + 1)) if max_s > 0 and max_c > 0 else 0
+                    n_count = normalize(ct, min_c, max_c)
+                    return (
+                        weights.price * n_price
+                        + weights.rating * n_rating
+                        + weights.review_score * n_score
+                        + weights.review_count * n_count
+                    )
+                results.sort(key=sort_key, reverse=True)
+            logger.info("Optimization applied: %s", params.optimization)
+
+        await ctx.report_progress(0.8, "Formatting results...")
+
+        if params.response_format == ResponseFormat.JSON:
+            result = json.dumps(response, indent=2)
+            return _truncate_if_needed(result, "stays")
+
+        # Markdown format (data/results already extracted above)
+        lines = ["# Hotel Search Results\n"]
+
+        lines.append("## Search Criteria")
+        lines.append(f"- **Check-in**: {params.check_in_date}")
+        lines.append(f"- **Check-out**: {check_out_date}")
+        lines.append(f"- **Nights**: {params.num_nights}")
+        lines.append(f"- **Guests**: {len(params.guests)} ({', '.join(g.type for g in params.guests)})")
+        lines.append(f"- **Rooms**: {params.rooms}")
+        if params.free_cancellation_only:
+            lines.append("- **Cancellation**: Free cancellation only")
+        if params.min_rating is not None or params.max_rating is not None:
+            parts = []
+            if params.min_rating is not None:
+                parts.append(f">= {params.min_rating}★")
+            if params.max_rating is not None:
+                parts.append(f"<= {params.max_rating}★")
+            lines.append(f"- **Rating**: {' and '.join(parts)}")
+
+        if results:
+            lines.append(f"- **Sorted by**: {params.optimization}")
+            lines.append(f"\n## Accommodations ({len(results)} found)\n")
+
+            for i, result in enumerate(results[:30], 1):
+                acc = result.get("accommodation", {})
+                name = acc.get("name", "N/A")
+                rating = acc.get("rating")
+                review_score = acc.get("review_score")
+                review_count = acc.get("review_count")
+
+                # Price info
+                price_amount = result.get("cheapest_rate_total_amount", "N/A")
+                price_currency = result.get("cheapest_rate_currency", "N/A")
+
+                # Location
+                addr = acc.get("location", {}).get("address", {})
+                city = addr.get("city_name", "")
+                region = addr.get("region", "")
+                country = addr.get("country_code", "")
+                location_str = ", ".join(filter(None, [city, region, country]))
+
+                # Brand / chain
+                brand = acc.get("brand", {})
+                chain = acc.get("chain", {})
+                brand_name = brand.get("name") or chain.get("name")
+
+                # Amenities (first 5)
+                amenities = acc.get("amenities", [])
+                amenity_types = [a.get("type", "").replace("_", " ").title() for a in amenities[:5]]
+
+                lines.append(f"### {i}. {name}")
+                if brand_name:
+                    lines.append(f"**{brand_name}**")
+                if rating:
+                    lines.append(f"{'★' * rating} ({rating}/5)")
+                if review_score is not None:
+                    lines.append(f"Review score: {review_score}/10{f' ({review_count} reviews)' if review_count else ''}")
+                if location_str:
+                    lines.append(f"- {location_str}")
+                lines.append(f"**{_format_price(price_amount, price_currency)}** total")
+                if amenity_types:
+                    lines.append(f"Amenities: {', '.join(amenity_types)}")
+                lines.append(f"\n`search_result_id`: `{result.get('id')}`")
+                lines.append("")
+
+            if len(results) > 30:
+                lines.append(f"*Showing 30 of {len(results)} results. Use JSON format for full response.*")
+        else:
+            lines.append("\n## No accommodations found")
+            lines.append("No hotels matched your search criteria. Try adjusting dates, location, or removing filters.")
+
+        await ctx.report_progress(1.0, "Search complete")
+
+        logger.info("Stay search completed: %d results found", len(results))
+
+        result = "\n".join(lines)
+        return _truncate_if_needed(result, "stays")
+
+    except Exception as e:
+        return _handle_api_error(e, ctx)
+
+
 @mcp.tool(
     name="duffel_flexible_search",
     annotations={
@@ -2730,8 +3164,6 @@ async def duffel_flexible_search(params: FlexibleDateSearchInput, ctx: Context) 
     Returns:
         Comparison of cheapest options found across all searched dates, with recommendations.
     """
-    from datetime import datetime, timedelta
-
     try:
         logger.info(
             "Flexible search: %s->%s, target %s (return: %s), +/-%d days",
@@ -2894,7 +3326,7 @@ async def duffel_flexible_search(params: FlexibleDateSearchInput, ctx: Context) 
             savings = target_result['price'] - cheapest['price']
             lines.append(f"\n## 📅 Your Target Dates ({params.departure_date})\n")
             lines.append(f"**{target_result['currency']} {target_result['price']:.2f}** - {target_result['airline']}")
-            lines.append(f"\n💰 **Savings**: Flying on {cheapest['departure_date']} instead saves **${savings:.2f}**")
+            lines.append(f"\n💰 **Savings**: Flying on {cheapest['departure_date']} instead saves **{cheapest['currency']} {savings:.2f}**")
 
         # Top 5 options
         lines.append("\n## All Options (sorted by price)\n")
@@ -2907,22 +3339,23 @@ async def duffel_flexible_search(params: FlexibleDateSearchInput, ctx: Context) 
             if r['return_date']:
                 dates += f" - {r['return_date']}"
             diff = r['price'] - target_price
-            diff_str = f"+${diff:.0f}" if diff > 0 else f"-${abs(diff):.0f}" if diff < 0 else "target"
+            cur = cheapest['currency']
+            diff_str = f"+{cur}{diff:.0f}" if diff > 0 else f"-{cur}{abs(diff):.0f}" if diff < 0 else "target"
             marker = " 🏆" if r == cheapest else ""
-            lines.append(f"| {dates} | ${r['price']:.2f}{marker} | {r['airline']} | {diff_str} |")
+            lines.append(f"| {dates} | {cur}{r['price']:.2f}{marker} | {r['airline']} | {diff_str} |")
 
         # Recommendation
         lines.append("\n## 💡 Recommendation\n")
         if cheapest['is_target_date']:
-            lines.append(f"Great news! Your target dates are already the cheapest option at **${cheapest['price']:.2f}**.")
+            lines.append(f"Great news! Your target dates are already the cheapest option at **{cheapest['currency']}{cheapest['price']:.2f}**.")
         elif target_result:
             savings = target_result['price'] - cheapest['price']
             if savings > 20:
-                lines.append(f"Consider flying **{cheapest['departure_date']}** instead of {params.departure_date} to save **${savings:.2f}**.")
+                lines.append(f"Consider flying **{cheapest['departure_date']}** instead of {params.departure_date} to save **{cheapest['currency']} {savings:.2f}**.")
             else:
-                lines.append(f"Your target dates are close to the best price. Only ${savings:.2f} difference.")
+                lines.append(f"Your target dates are close to the best price. Only {cheapest['currency']} {savings:.2f} difference.")
         else:
-            lines.append(f"The cheapest option is **${cheapest['price']:.2f}** on {cheapest['departure_date']}.")
+            lines.append(f"The cheapest option is **{cheapest['currency']}{cheapest['price']:.2f}** on {cheapest['departure_date']}.")
 
         await ctx.report_progress(1.0, "Done")
         logger.info("Flexible search complete: found %d options, cheapest $%.2f", len(all_results), cheapest['price'])
@@ -4520,7 +4953,7 @@ async def duffel_create_checkout(params: CreateCheckoutInput, ctx: Context) -> s
 
         # 4. Create and store the checkout session
         session_id = str(uuid.uuid4())
-        now = datetime.utcnow()
+        now = datetime.now(timezone.utc)
 
         session = CheckoutSession(
             session_id=session_id,
@@ -4732,7 +5165,7 @@ class ScannerProtectionMiddleware:
     def _is_blocked(self, ip: str) -> bool:
         """Check if an IP is currently blocked."""
         if ip in self._blocked_ips:
-            if datetime.utcnow().timestamp() < self._blocked_ips[ip]:
+            if datetime.now(timezone.utc).timestamp() < self._blocked_ips[ip]:
                 return True
             else:
                 # Block expired
@@ -4742,7 +5175,7 @@ class ScannerProtectionMiddleware:
 
     def _block_ip(self, ip: str):
         """Block an IP address."""
-        expiry = datetime.utcnow().timestamp() + self.BLOCK_DURATION
+        expiry = datetime.now(timezone.utc).timestamp() + self.BLOCK_DURATION
         self._blocked_ips[ip] = expiry
         logger.warning("Blocked IP %s for %d seconds due to abuse", ip, self.BLOCK_DURATION)
 
