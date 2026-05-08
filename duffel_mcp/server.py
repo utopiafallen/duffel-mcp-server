@@ -916,12 +916,24 @@ def _parse_duration_minutes(offer: Dict[str, Any]) -> int:
     total_minutes = 0
     for slice_data in offer.get("slices", []):
         duration_str = slice_data.get("duration", "PT0H0M")
-        # Parse ISO 8601 duration (e.g., "PT2H30M")
-        match = re.match(r'PT(?:(\d+)H)?(?:(\d+)M)?', duration_str)
+        # Updated Regex: 
+        # ^P          -> Starts with P
+        # (?:(\d+)D)? -> Optional Group 1: Days
+        # T?          -> Optional T separator (to handle both P1DT2H and PT2H)
+        # (?:(\d+)H)? -> Optional Group 2: Hours
+        # (?:(\d+)M)? -> Optional Group 3: Minutes
+        # (?:(\d+)S)? -> Optional Group 4: Seconds
+        match = re.match(r'^P(?:(\d+)D)?T?(?:(\d+)H)?(?:(\d+)M)?(?:(\d+)S)?$', duration_str)
+
         if match:
-            hours = int(match.group(1) or 0)
-            minutes = int(match.group(2) or 0)
-            total_minutes += hours * 60 + minutes
+            days    = int(match.group(1) or 0)
+            hours   = int(match.group(2) or 0)
+            minutes = int(match.group(3) or 0)
+
+            # Conversion logic:
+            # Days to minutes: days * 24 * 60 = 1440
+            # Hours to minutes: hours * 60
+            total_minutes += (days * 1440) + (hours * 60) + minutes
     return total_minutes
 
 def _extract_baggage_info(offer: Dict[str, Any]) -> str:
@@ -1665,16 +1677,16 @@ async def duffel_search_flights(params: SearchFlightsInput, ctx: Context) -> str
     Search for flights by creating an offer request in the Duffel API.
 
     SMART AGENT TIPS:
-    - For "cheapest" requests: Search multiple date combinations (+/- 3 days)
-      and compare results. Don't just search one date.
     - Present results with context: Note if bags aren't included, if there's
       a long layover, or if it's a budget carrier with extra fees.
     - Make recommendations based on the trade-offs you find.
-    - Only ask the user questions if truly needed (missing origin, vague dates).
+    - Prefer 'markdown' `response_format` to see summarized results.
 
     This tool searches for available flights based on itinerary (origin, destination, dates),
     passenger information, and preferences like cabin class. It supports optimization
-    strategies to find the cheapest, fastest, or best overall flights.
+    strategies to find the cheapest, fastest, or best overall flights. Slices are used to express
+    one way (1 slice), round trip (2 slice), or multi-city flights (2+ slices). Slices are NOT
+    used to search multiple dates at once, use `duffel_flexible_search` instead.
 
     Args:
         params (SearchFlightsInput): Validated input parameters containing:
