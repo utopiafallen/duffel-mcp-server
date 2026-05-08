@@ -1,48 +1,75 @@
 # Duffel MCP Server
 
-A Model Context Protocol (MCP) server for the Duffel flight booking API. This server enables LLMs to search for flights, retrieve offers, and create bookings through a compliant MCP interface with intelligent optimization strategies.
+A Model Context Protocol (MCP) server for the Duffel travel API. This server enables LLMs to search for flights and hotels, retrieve offers, and create bookings through a compliant MCP interface with intelligent optimization strategies.
 
 ## Features
 
-### Tools Provided
+### Flight Tools
 
 1. **duffel_search_flights** - Search for flights with optimization
-   - One-way and round-trip searches
-   - Multiple passengers support
-   - Cabin class preferences
-   - Connection filters (non-stop, max connections)
-   - **Optimization strategies**: cheapest, fastest, best, least_stops, earliest, latest
-   - **Weighted scoring** for finding optimal flights
+    - One-way and round-trip searches
+    - Multiple passengers support
+    - Cabin class preferences
+    - Connection filters (non-stop, max connections)
+    - **Optimization strategies**: cheapest, fastest, best, least_stops, earliest, latest
+    - **Weighted scoring** for finding optimal flights
 
 2. **duffel_analyze_offers** - Analyze and rank offers from a search
-   - Apply optimization strategies post-search
-   - Custom weight configuration for price, duration, stops, departure time
-   - Market overview with price/duration ranges
-   - Scored rankings for easy comparison
+    - Apply optimization strategies post-search
+    - Custom weight configuration for price, duration, stops, departure time
+    - Market overview with price/duration ranges
+    - Scored rankings for easy comparison
 
 3. **duffel_get_offer** - Get detailed, up-to-date offer information
-   - Latest pricing
-   - Complete itinerary details
-   - Booking conditions
-   - Available services
+    - Latest pricing
+    - Complete itinerary details
+    - Booking conditions
+    - Available services
 
 4. **duffel_list_offers** - List and filter offers from a search
-   - Pagination support
-   - Sort by price or duration
-   - Filter by connections
+    - Pagination support
+    - Sort by price or duration
+    - Filter by connections
 
 5. **duffel_create_order** - Create flight bookings
-   - Complete passenger details
-   - Payment processing
-   - Booking confirmation
+    - Complete passenger details
+    - Payment processing
+    - Booking confirmation
 
 6. **duffel_list_airlines** - Reference data for available airlines
+
+7. **duffel_flexible_search** - Find cheapest flights across a date range
+    - Automatically searches +/- N days from target dates
+    - Compares and presents best options with savings analysis
+    - Works for one-way and round-trip
+
+8. **duffel_search_partial** - Mix-and-match airlines per leg
+    - Search round-trip/multi-city with different airlines each way
+    - Per-leg pricing for cheapest combination
+
+9. **duffel_get_seat_map** - Retrieve seat maps for an offer
+    - Cabin layout analysis (window/aisle/middle)
+    - Available seats organized by row with pricing
+    - Adjacent seat suggestions for groups
+
+10. **duffel_create_checkout** - Create a hosted checkout session with payment link
+11. **duffel_get_booking_link** - Get a branded Duffel Links booking page URL
+
+### Hotel Tools
+
+12. **duffel_search_stays** - Search for hotels and accommodation
+    - Geographic location search (lat/lon + radius)
+    - Guest configuration (adults, children with ages)
+    - Star rating filters (client-side, unrated treated as 1-star)
+    - Cancellation and payment type filters
+    - **Optimization strategies**: cheapest, best_reviewed, most_reviewed, recommended
 
 ### Resources
 
 - `duffel://airlines` - List of all available airlines
 - `duffel://airlines/{iata_code}` - Details for a specific airline
-- `duffel://places/{query}` - Search for airports and cities
+- `duffel://places/{query}` - Search for airports and cities (returns IATA codes)
+- `duffel://instructions` - AI agent guidelines for effective search behavior
 
 ### Prompts
 
@@ -50,7 +77,7 @@ A Model Context Protocol (MCP) server for the Duffel flight booking API. This se
 - `find_cheapest` - Strategy for finding the most affordable options
 - `compare_options` - Compare and analyze multiple flight options
 
-## Optimization Strategies
+## Flight Optimization Strategies
 
 | Strategy | Description |
 |----------|-------------|
@@ -80,6 +107,40 @@ Customize weights with the `optimization_weights` parameter:
     "duration": 0.3,
     "stops": 0.15,
     "departure_time": 0.05
+  }
+}
+```
+
+## Hotel Optimization Strategies
+
+The `duffel_search_stays` tool supports four sorting strategies (all client-side):
+
+| Strategy | Description |
+|----------|-------------|
+| `cheapest` | Sort by total price ascending |
+| `best_reviewed` | Confidence-weighted: review score × log(review count + 1) |
+| `most_reviewed` | Sort by number of reviews descending |
+| `recommended` | Normalized weighted composite (default) |
+
+### Recommended Strategy Weights
+
+The `recommended` strategy normalizes each factor to 0-1 across all results, then computes a weighted sum:
+
+| Factor | Default Weight | Description |
+|--------|---------------|-------------|
+| Price | 0.3 | Lower prices score higher (inverted) |
+| Rating | 0.2 | More stars score higher |
+| Review Score | 0.3 | Higher review score with confidence weighting |
+| Review Count | 0.2 | More reviews score higher |
+
+Customize weights with the `optimization_weights` parameter:
+```json
+{
+  "optimization_weights": {
+    "price": 0.4,
+    "rating": 0.15,
+    "review_score": 0.35,
+    "review_count": 0.1
   }
 }
 ```
@@ -142,6 +203,8 @@ Your Duffel API key must have the following permissions:
 - `air.orders.create` - For creating bookings
 - `air.airlines.read` - For airline reference data
 
+**For hotel search**, you'll also need Stays API access. This is a separate opt-in from the flight API — request access at [duffel.com/contact-us](https://duffel.com/contact-us) if you haven't already.
+
 To get an API key:
 1. Sign up at [duffel.com](https://duffel.com)
 2. Complete account verification
@@ -149,38 +212,60 @@ To get an API key:
 
 ## Examples
 
-### Search for the Best Flights
+### Flight Searches
+
+#### Search for the Best Flights
 
 ```
 Search for the best flights from JFK to LAX on December 15, optimizing for price and convenience
 ```
 
-### Find the Cheapest Option
+#### Find the Cheapest Option
 
 ```
 Find the cheapest flight from SGN to KUL, departing November 21, returning November 23
 ```
 
-### Analyze Search Results
+#### Analyze Search Results
 
 ```
 Analyze the search results and show me the top 5 options with the best overall value
 ```
 
-### Search with Time Preference
+#### Search with Time Preference
 
 ```
 Search for morning flights from LHR to CDG with the best optimization
+```
+
+### Hotel Searches
+
+#### Search by Location
+
+```
+Find hotels in London (lat 51.5074, lon -0.1278) for 2 adults, June 4-7
+```
+
+#### Filter by Rating
+
+```
+Find best-reviewed 4+ star hotels in Paris with free cancellation
+```
+
+#### Custom Optimization
+
+```
+Search hotels near Tokyo, cheapest first, 3 nights starting March 15
 ```
 
 ## Response Formats
 
 All tools support two output formats:
 
-- **Markdown** (default): Human-readable formatted output with scores
+- **Markdown** (default): Human-readable formatted output with scores and summaries
 - **JSON**: Complete API response for programmatic processing
 
-Specify the format with the `response_format` parameter.
+Specify the format with the `response_format` parameter. For hotel searches, markdown is capped at 30 results — use JSON for full responses.
 
 ## Error Handling
 
