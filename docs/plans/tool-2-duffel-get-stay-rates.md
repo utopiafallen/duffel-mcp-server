@@ -107,7 +107,7 @@ Place immediately after `duffel_search_stays` at line 3136 (after the `except` b
 +
 +        if params.response_format == ResponseFormat.JSON:
 +            result = json.dumps(response, indent=2)
-+            return _truncate_if_needed(result)
++            return _truncate_if_needed(result, "stay rates")
 +
 +        # Markdown format
 +        data = response.get("data", {})
@@ -140,9 +140,10 @@ Place immediately after `duffel_search_stays` at line 3136 (after the `except` b
 +        check_in_after = check_in_info.get("check_in_after_time")
 +        check_in_before = check_in_info.get("check_in_before_time")
 +        check_out_before = check_in_info.get("check_out_before_time")
-+        if check_in_after or check_out_before:
++        if check_in_after or check_in_before:
 +            lines.append(f"- **Check-in**: {check_in_after or 'N/A'} - {check_in_before or 'N/A'}")
-+            lines.append(f"- **Check-out**: before {check_out_before or 'N/A'}")
++        if check_out_before:
++            lines.append(f"- **Check-out**: before {check_out_before}")
 +        
 +        key_collection = accommodation.get("key_collection", {})
 +        key_instructions = key_collection.get("instructions")
@@ -244,7 +245,7 @@ Place immediately after `duffel_search_stays` at line 3136 (after the `except` b
 +                            first_refund = cancellation[0]
 +                            refund_amount = first_refund.get("refund_amount", "0")
 +                            refund_before = first_refund.get("before", "")
-+                            is_free = (refund_amount == total_amount) if refund_amount else False
++                            is_free = (float(refund_amount) == float(total_amount)) if refund_amount and total_amount else False
 +                            cancel_label = "Free cancellation" if is_free else f"Partial refund ({_format_price(refund_amount, total_currency)})"
 +                            lines.append(f"- **Cancellation**: {cancel_label} (before {_format_datetime(refund_before)})")
 +                        else:
@@ -262,7 +263,7 @@ Place immediately after `duffel_search_stays` at line 3136 (after the `except` b
 +                            for cond in conditions[:5]:  # Limit to 5 conditions
 +                                title = cond.get("title", "")
 +                                desc = cond.get("description", "")
-+                                lines.append(f"  - {title}: {desc}")
++                                lines.append(f"  - **{title}**: {desc}")
 +                        
 +                        # Loyalty
 +                        rate_loyalty = rate.get("supported_loyalty_programme")
