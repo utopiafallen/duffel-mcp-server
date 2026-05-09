@@ -721,6 +721,14 @@ class SearchStaysInput(BaseModel):
         description="Check-in date in YYYY-MM-DD format (max 330 days in the future)",
         pattern=r'^\d{4}-\d{2}-\d{2}$'
     )
+
+    @field_validator('check_in_date')
+    @classmethod
+    def validate_check_in_date(cls, v: str) -> str:
+        """Ensure the date is valid (e.g., rejects 2025-02-30)."""
+        datetime.strptime(v, "%Y-%m-%d")
+        return v
+
     num_nights: int = Field(
         ...,
         description="Number of nights to stay",
@@ -3101,7 +3109,7 @@ async def duffel_search_stays(params: SearchStaysInput, ctx: Context) -> str:
 
                 # Amenities (first 5)
                 amenities = acc.get("amenities", [])
-                amenity_types = [a.get("type", "").replace("_", " ").title() for a in amenities[:5]]
+                amenity_types = [t for t in [(a.get("type") or "").replace("_", " ").title() for a in amenities[:5]] if t]
 
                 lines.append(f"### {i}. {name}")
                 if brand_name:
@@ -3112,7 +3120,10 @@ async def duffel_search_stays(params: SearchStaysInput, ctx: Context) -> str:
                     lines.append(f"Review score: {review_score}/10{f' ({review_count} reviews)' if review_count else ''}")
                 if location_str:
                     lines.append(f"- {location_str}")
-                lines.append(f"**{_format_price(price_amount, price_currency)}** total")
+                if price_amount != "N/A":
+                    lines.append(f"**{_format_price(price_amount, price_currency)}** total")
+                else:
+                    lines.append("**Price unavailable** total")
                 if amenity_types:
                     lines.append(f"Amenities: {', '.join(amenity_types)}")
                 lines.append(f"\n`search_result_id`: `{result.get('id')}`")
