@@ -279,7 +279,12 @@ class SearchFlightsInput(BaseModel):
 
     slices: List[FlightSlice] = Field(
         ...,
-        description="Flight slices: one for one-way, two for round-trip",
+        description=(
+            "Connected legs of a SINGLE itinerary. "
+            "1 slice = one-way (A→B). 2 slices = round-trip (A→B, B→A) or open-jaw (A→B, C→D). "
+            "Each slice's destination must be the next slice's origin. "
+            "Do NOT put unrelated searches here — call this tool separately for each trip."
+        ),
         min_length=1,
         max_length=4
     )
@@ -326,6 +331,21 @@ class SearchFlightsInput(BaseModel):
         default=ResponseFormat.MARKDOWN,
         description="Output format: 'markdown' or 'json'"
     )
+
+    @model_validator(mode='after')
+    def validate_slices_connected(self) -> 'SearchFlightsInput':
+        """Each slice's destination must be the next slice's origin."""
+        if len(self.slices) < 2:
+            return self
+        for i, (curr, nxt) in enumerate(zip(self.slices, self.slices[1:]), 1):
+            if curr.destination != nxt.origin:
+                raise ValueError(
+                    f"Slice {i} arrives at {curr.destination} but slice {i+1} "
+                    f"departs from {nxt.origin}. Slices must form a connected itinerary. "
+                    "For unrelated trips, call this tool separately for each."
+                )
+        return self
+
 
 class GetOfferInput(BaseModel):
     """Input model for retrieving a single offer."""
@@ -1833,6 +1853,11 @@ async def duffel_search_flights(params: SearchFlightsInput, ctx: Context) -> str
     """
     Search for flights by creating an offer request in the Duffel API.
 
+    IMPORTANT: This tool searches ONE trip at a time. The 'slices' parameter
+    defines connected legs of that single trip — e.g., outbound + return for
+    a round-trip. Do NOT use slices to search multiple unrelated trips (e.g.,
+    NYC→LAX and London→Tokyo). Call this tool separately for each trip.
+
     SMART AGENT TIPS:
     - Present results with context: Note if bags aren't included, if there's
       a long layover, or if it's a budget carrier with extra fees.
@@ -1841,13 +1866,18 @@ async def duffel_search_flights(params: SearchFlightsInput, ctx: Context) -> str
 
     This tool searches for available flights based on itinerary (origin, destination, dates),
     passenger information, and preferences like cabin class. It supports optimization
-    strategies to find the cheapest, fastest, or best overall flights. Slices are used to express
-    one way (1 slice), round trip (2 slice), or multi-city flights (2+ slices). Slices are NOT
-    used to search multiple dates at once, use `duffel_flexible_search` instead.
+    strategies to find the cheapest, fastest, or best overall flights.
+
+    Slice count guide:
+      1 slice = one-way (A → B)
+      2 slices = round-trip (A → B, then B → A) or open-jaw (A → B, C → A)
+      3+ slices = multi-city (each destination connects to the next origin)
+
+    Slices are NOT used to search multiple dates at once — use duffel_flexible_search instead.
 
     Args:
         params (SearchFlightsInput): Validated input parameters containing:
-            - slices (List[FlightSlice]): Flight segments with optional time filters:
+            - slices (List[FlightSlice]): Connected legs of a single trip with optional time filters:
                 - origin, destination, departure_date (required)
                 - departure_time: TimeRange {'from': 'HH:MM', 'to': 'HH:MM'} (optional)
                 - arrival_time: TimeRange {'from': 'HH:MM', 'to': 'HH:MM'} (optional)
