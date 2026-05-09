@@ -281,7 +281,7 @@ class SearchFlightsInput(BaseModel):
         ...,
         description=(
             "Connected legs of a SINGLE itinerary. "
-            "1 slice = one-way (A→B). 2 slices = round-trip (A→B, B→A) or open-jaw (A→B, C→D). "
+            "1 slice = one-way (A→B). 2 slices = round-trip (A→B, B→A). "
             "Each slice's destination must be the next slice's origin. "
             "Do NOT put unrelated searches here — call this tool separately for each trip."
         ),
@@ -1870,7 +1870,7 @@ async def duffel_search_flights(params: SearchFlightsInput, ctx: Context) -> str
 
     Slice count guide:
       1 slice = one-way (A → B)
-      2 slices = round-trip (A → B, then B → A) or open-jaw (A → B, C → A)
+      2 slices = round-trip (A → B, then B → A)
       3+ slices = multi-city (each destination connects to the next origin)
 
     Slices are NOT used to search multiple dates at once — use duffel_flexible_search instead.
