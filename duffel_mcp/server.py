@@ -1881,53 +1881,16 @@ async def duffel_search_flights(params: SearchFlightsInput, ctx: Context) -> str
     """
     Search for flights by creating an offer request in the Duffel API.
 
-    IMPORTANT: This tool searches ONE trip at a time. The 'slices' parameter
-    defines connected legs of that single trip — e.g., outbound + return for
-    a round-trip. Do NOT use slices to search multiple unrelated trips (e.g.,
-    NYC→LAX and London→Tokyo). Call this tool separately for each trip.
-
-    SMART AGENT TIPS:
-    - Present results with context: Note if bags aren't included, if there's
-      a long layover, or if it's a budget carrier with extra fees.
-    - Make recommendations based on the trade-offs you find.
-    - Prefer 'markdown' `response_format` to see summarized results.
-
-    This tool searches for available flights based on itinerary (origin, destination, dates),
-    passenger information, and preferences like cabin class. It supports optimization
-    strategies to find the cheapest, fastest, or best overall flights.
+    IMPORTANT: Searches ONE trip at a time. Slices define connected legs of
+    that single trip (outbound + return). Do NOT use slices for unrelated
+    trips — call this tool separately for each.
 
     Slice count guide:
       1 slice = one-way (A → B)
       2 slices = round-trip (A → B, then B → A)
       3+ slices = multi-city (each destination connects to the next origin)
 
-    Slices are NOT used to search multiple dates at once — use duffel_flexible_search instead.
-
-    Args:
-        params (SearchFlightsInput): Validated input parameters containing:
-            - slices (List[FlightSlice]): Connected legs of a single trip with optional time filters:
-                - origin, destination, departure_date (required)
-                - departure_time: TimeRange {'from': 'HH:MM', 'to': 'HH:MM'} (optional)
-                - arrival_time: TimeRange {'from': 'HH:MM', 'to': 'HH:MM'} (optional)
-            - passengers (List[PassengerInput]): Passenger list (max 9)
-            - cabin_class (Optional[CabinClass]): Cabin preference (default: economy)
-            - max_connections (Optional[int]): Max connections (0=non-stop)
-            - return_offers (bool): Return offers immediately (default: true)
-            - optimization (OptimizationStrategy): Sort strategy (cheapest, fastest, best, etc.)
-            - optimization_weights (OptimizationWeights): Custom weights for 'best' strategy
-            - preferred_departure_time (DepartureTimePreference): Preferred departure window
-            - top_n (Optional[int]): Return only top N results
-            - response_format (ResponseFormat): 'markdown' or 'json'
-        ctx (Context): MCP context for progress reporting and logging
-
-    Returns:
-        str: Formatted response containing flight offers and search details
-
-    Examples:
-        - "Find flights from SGN to KUL departing Dec 24, returning Dec 26"
-        - "Search cheapest business class flights NYC to LON" (search multiple dates!)
-        - "Find morning flights departing after 9am" (use departure_time filter)
-        - "Find flights arriving before 8pm" (use arrival_time filter)
+    For multi-date price comparison, use duffel_flexible_search instead.
     """
     try:
         await ctx.report_progress(0.1, "Validating search parameters...")
@@ -2086,27 +2049,8 @@ async def duffel_analyze_offers(params: AnalyzeOffersInput, ctx: Context) -> str
     """
     Analyze and rank flight offers from a previous search.
 
-    Use this after duffel_search_flights to find the best options based on
-    user preferences. Supports multiple optimization strategies and custom
-    weighting for the 'best' algorithm.
-
-    Args:
-        params (AnalyzeOffersInput): Validated input parameters containing:
-            - offer_request_id (str): Offer request ID from previous search
-            - optimization (OptimizationStrategy): Strategy to apply
-            - optimization_weights (OptimizationWeights): Custom weights for 'best'
-            - preferred_departure_time (DepartureTimePreference): Time preference
-            - top_n (int): Number of results to return (default: 5)
-            - response_format (ResponseFormat): Output format
-        ctx (Context): MCP context for progress and logging
-
-    Returns:
-        str: Ranked and analyzed flight offers with scores
-
-    Examples:
-        - Use when: "Analyze the search results and find the best value"
-        - Use when: "Compare the top 5 cheapest flights from the last search"
-        - Use when: "Find flights that balance price and duration"
+    Use after duffel_search_flights to find the best options based on
+    optimization strategy (cheapest, fastest, best, etc.) with custom weights.
     """
     try:
         logger.info(
@@ -2219,16 +2163,8 @@ async def duffel_get_offer(params: GetOfferInput, ctx: Context) -> str:
     """
     Retrieve the latest details for a specific flight offer.
 
-    This tool fetches up-to-date information for a specific offer using its ID.
-    It's recommended to call this before booking to ensure the offer is still
-    valid and to get the latest pricing.
-
-    Args:
-        params (GetOfferInput): Validated input parameters
-        ctx (Context): MCP context for progress reporting
-
-    Returns:
-        str: Formatted offer details including pricing, itinerary, and conditions
+    Recommended to call before booking to ensure the offer is still valid
+    and to get the latest pricing.
     """
     try:
         logger.info("Fetching offer details for %s", params.offer_id)
@@ -2315,15 +2251,8 @@ async def duffel_list_offers(params: ListOffersInput, ctx: Context) -> str:
     """
     List all flight offers from a specific offer request with filtering and sorting.
 
-    This tool retrieves offers from a previous search (offer request), with support
-    for pagination, filtering by connections, and sorting by price or duration.
-
-    Args:
-        params (ListOffersInput): Validated input parameters
-        ctx (Context): MCP context for progress reporting
-
-    Returns:
-        str: Formatted list of flight offers with filtering applied
+    Retrieves offers from a previous search with pagination, connection filtering,
+    and price/duration sorting.
     """
     try:
         logger.info("Listing offers for request %s (limit=%d, sort=%s)", params.offer_request_id, params.limit, params.sort)
@@ -2404,23 +2333,12 @@ async def duffel_create_order(params: CreateOrderInput, ctx: Context) -> str:
     """
     Create a flight booking (order) with passenger and payment details.
 
-    This tool creates a confirmed flight booking for a selected offer. It requires
-    complete passenger information (names, DOB, contact details) and payment information.
-    This operation charges the payment method and confirms the booking with the airline.
+    Creates a confirmed booking for a selected offer. Requires complete passenger
+    information and payment details. This operation charges the payment method
+    and confirms the booking with the airline.
 
-    Optionally, you can add services like seat selection. Get seat service IDs from
+    Optionally add services (seat selection) — get seat service IDs from
     duffel_get_seat_map and include them in the services parameter.
-
-    Args:
-        params (CreateOrderInput): Validated input parameters containing:
-            - selected_offers: List with one offer ID
-            - passengers: Complete passenger details
-            - payments: Payment information
-            - services (optional): Seat selections or other services from duffel_get_seat_map
-        ctx (Context): MCP context for progress reporting
-
-    Returns:
-        str: Formatted order confirmation with booking reference and details
     """
     try:
         logger.info(
@@ -2612,27 +2530,9 @@ async def duffel_get_seat_map(params: GetSeatMapInput, ctx: Context) -> str:
     """
     Retrieve seat maps for a specific flight offer with layout analysis.
 
-    This tool fetches the seat map layout for each flight segment in an offer,
-    showing available seats organized by row. It analyzes the cabin layout to
-    determine seat positions (window/aisle/middle) and helps identify adjacent
-    seats for groups traveling together.
-
-    Args:
-        params (GetSeatMapInput): Input with offer_id and response_format
-        ctx (Context): MCP context for progress reporting
-
-    Returns:
-        str: Formatted seat map showing:
-        - Cabin layout (number of aisles, seat configuration)
-        - Available seats organized by row
-        - Seat position (window/aisle/middle)
-        - Prices and any restrictions
-        - Adjacent seat suggestions for groups
-
-    Note:
-        - Not all airlines support seat selection
-        - Seats must be selected during booking (duffel_create_order)
-        - Use the seat service ID when creating an order to select a seat
+    Fetches the seat map layout for each flight segment, showing available seats
+    organized by row with position analysis (window/aisle/middle) and pricing.
+    Use the returned seat service IDs with duffel_create_order to select seats.
     """
     try:
         logger.info("Fetching seat map for offer %s", params.offer_id)
@@ -2864,15 +2764,7 @@ async def duffel_list_airlines(params: ListAirlinesInput, ctx: Context) -> str:
     """
     List available airlines in the Duffel API.
 
-    This tool retrieves information about airlines that can be booked through Duffel,
-    including their names, IATA codes, and logos.
-
-    Args:
-        params (ListAirlinesInput): Validated input parameters
-        ctx (Context): MCP context for progress reporting
-
-    Returns:
-        str: Formatted list of airlines with codes and names
+    Returns airline names, IATA codes, and logos.
     """
     try:
         logger.info("Listing airlines (limit=%d)", params.limit)
@@ -2928,44 +2820,13 @@ async def duffel_search_stays(params: SearchStaysInput, ctx: Context) -> str:
     """
     Search for hotels and accommodation using the Duffel Stays API.
 
-    NOTE: Your DUFFEL_API_KEY_LIVE must have Stays permissions enabled.
-    This is a separate opt-in from the flight API — request access at
-    https://duffel.com/contact-us if you haven't already.
+    NOTE: DUFFEL_API_KEY_LIVE must have Stays permissions enabled (separate
+    opt-in — request at https://duffel.com/contact-us).
 
-    The tool requires lat/lon coordinates. The LLM should provide these from
-    its own knowledge (e.g., London ≈ 51.5074, -0.1278). The
-    duffel://places/{query} resource only returns airport IATA codes and
-    cannot be used for hotel search coordinates.
-
-    This tool returns a list of accommodations with their cheapest available
-    rate. To see full room options and rate details, use duffel_get_stay_rates
-    with the search_result_id from this response.
-
-    Args:
-        params (SearchStaysInput): Validated input parameters containing:
-            - location: Geographic search center (lat/lon + radius in km)
-            - check_in_date: Check-in date (YYYY-MM-DD, max 330 days future)
-            - num_nights: Number of nights to stay (1-99)
-            - guests: List of guests (adult or child with age)
-            - rooms: Number of rooms (default: 1)
-            - free_cancellation_only: Only free cancellation rates (default: false)
-            - instant_payment: True=pay-now, false=pay-at-hotel, omit=all
-            - min_rating: Minimum star rating filter (1-5)
-            - max_rating: Maximum star rating filter (1-5)
-            - optimization: Sort strategy — 'cheapest', 'best_reviewed', 'most_reviewed', 'recommended' (default)
-            - optimization_weights: Custom weights for 'recommended' strategy
-            - response_format: 'markdown' or 'json'
-        ctx (Context): MCP context for progress reporting
-
-    Returns:
-        str: Formatted list of accommodations with prices and search_result_ids
-
-    Examples:
-        - "Find hotels in London for 2 adults, June 4-7"
-          (location: lat=51.5071, lon=-0.1416, radius=5)
-        - "Search hotels near Eiffel Tower for 1 room, 3 guests"
-        - "Find accommodation with free cancellation in Tokyo"
-        - "Find best-reviewed 4+ star hotels in Paris" (min_rating=4, optimization='best_reviewed')
+    Requires lat/lon coordinates (from LLM knowledge, not the places resource
+    which only returns airport codes). Returns cheapest available rate per
+    accommodation. Use duffel_get_stay_rates with the search_result_id for
+    full room and rate details.
     """
     try:
         await ctx.report_progress(0.1, "Validating search parameters...")
@@ -3218,24 +3079,9 @@ async def duffel_get_stay_rates(params: GetStayRatesInput, ctx: Context) -> str:
     """
     Fetch detailed room and rate options for a hotel search result.
 
-    Use this after duffel_search_stays to get full details about rooms,
-    bed types, cancellation policies, and all available rates for a
-    specific accommodation. Each rate has a unique rate_id that can be
-    used with duffel_book_stay to make a booking.
-
-    Args:
-        params (GetStayRatesInput): Validated input parameters containing:
-            - search_result_id (str): Search result ID from duffel_search_stays
-            - response_format (ResponseFormat): Output format
-        ctx (Context): MCP context for progress and logging
-
-    Returns:
-        str: Formatted room and rate details with rate_ids for booking
-
-    Examples:
-        - Use when: "Show me the room options for that hotel"
-        - Use when: "What rates are available for srr_xxx?"
-        - Use when: "I want to see cancellation policies and bed types"
+    Use after duffel_search_stays to get full room details, bed types,
+    cancellation policies, and all available rates. Each rate has a
+    unique rate_id for use with duffel_book_stay.
     """
     try:
         logger.info("Fetching rates for search result %s", params.search_result_id)
@@ -3451,20 +3297,8 @@ async def duffel_flexible_search(params: FlexibleDateSearchInput, ctx: Context) 
     """
     Search for the cheapest flights across a range of dates.
 
-    USE THIS TOOL when the user wants the "cheapest", "most affordable", or "best deal"
-    on flights. It automatically searches multiple date combinations to find the
-    lowest price, then compares and presents the best options.
-
-    This is better than regular search when:
-    - User wants the cheapest option and has some date flexibility
-    - User says "around Christmas" or "sometime in December"
-    - User prioritizes price over specific dates
-
-    Args:
-        params: Contains origin, destination, target dates, and flexibility_days (+/- N days to search)
-
-    Returns:
-        Comparison of cheapest options found across all searched dates, with recommendations.
+    Use when the user wants the cheapest option and has date flexibility.
+    Automatically searches multiple date combinations to find the lowest price.
     """
     try:
         logger.info(
@@ -3683,21 +3517,11 @@ async def duffel_search_partial(params: SearchPartialInput, ctx: Context) -> str
     """
     Search for flights with mix-and-match legs from different airlines.
 
-    USE THIS TOOL when the user wants the cheapest round-trip combination and is open
-    to flying different airlines on each leg. This uses Duffel's partial offer request
-    API which returns per-leg pricing, allowing you to combine the cheapest outbound
-    from one airline with the cheapest return from another.
+    Use when the user wants the absolute cheapest round-trip and is open to
+    different airlines on each leg. Returns per-leg pricing to find the
+    cheapest outbound + return combination.
 
-    This is better than regular search when:
-    - User wants the absolute cheapest round-trip
-    - User is flexible about airlines
-    - User says "mix and match" or "different airlines each way"
-
-    Args:
-        params: Slices (2+ for round-trip/multi-city), passengers, cabin class, connection limits
-
-    Returns:
-        Per-leg options with prices, plus the cheapest combined total.
+    Requires 2+ slices (round-trip or multi-city only, not one-way).
     """
     try:
         route_summary = " -> ".join([f"{s.origin}->{s.destination}" for s in params.slices])
@@ -5206,25 +5030,11 @@ async def duffel_create_checkout(params: CreateCheckoutInput, ctx: Context) -> s
     """
     Create a checkout session with a payment link for completing a flight booking.
 
-    This tool creates a secure checkout page where the customer can enter their
-    payment details. After successful payment, the booking is automatically confirmed.
+    Creates a secure checkout page where the customer enters payment details.
+    After successful payment, the booking is automatically confirmed.
 
-    Use this instead of duffel_create_order when you want the customer to pay
-    via credit/debit card through a secure web form.
-
-    Args:
-        params (CreateCheckoutInput): Contains:
-            - offer_id: The flight offer to book
-            - passengers: Complete passenger details (name, DOB, contact info)
-
-    Returns:
-        A checkout URL that the customer can visit to complete payment.
-        The URL is valid for 30 minutes.
-
-    Example:
-        After finding a flight offer, create a checkout:
-        - offer_id: "off_00009htYpSCXrwaB9DnUm0"
-        - passengers: [{id, given_name, family_name, born_on, email, phone_number, title, gender}]
+    Use this instead of duffel_create_order for card payments via a web form.
+    The checkout URL is valid for 30 minutes.
     """
     try:
         await ctx.report_progress(0.1, "Fetching offer details...")
@@ -5349,22 +5159,8 @@ async def duffel_get_booking_link(
     """
     Get a branded booking link where customers can search and book flights.
 
-    This uses Duffel Links - a hosted booking interface. The customer gets a
-    professional booking page where they can:
-    - Search for flights
-    - Select their preferred option
-    - Enter passenger details
-    - Complete payment
-
-    No need to collect any personal info in chat!
-
-    Args:
-        reference: Optional user/session reference for tracking (auto-generated if not provided)
-        currency: Currency for prices (default: USD)
-        ctx: MCP context
-
-    Returns:
-        A booking URL for the customer to complete their flight booking.
+    Uses Duffel Links — a hosted booking interface where customers can search,
+    select, and pay for flights without sharing personal info in chat.
     """
     try:
         await ctx.report_progress(0.2, "Creating booking session...")
