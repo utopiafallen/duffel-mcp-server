@@ -1104,6 +1104,67 @@ def _format_datetime(dt_str: str) -> str:
     except:
         return dt_str
 
+
+def _format_localtime_from_iso_datetime(dt_str: str) -> str:
+    """Format ISO datetime to HH:MM local time."""
+    try:
+        dt = datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+        return dt.strftime("%H:%M")
+    except:
+        return "??"
+
+
+def _parse_iso_datetime(dt_str: str) -> datetime | None:
+    """Parse ISO datetime string, returning None on failure."""
+    try:
+        return datetime.fromisoformat(dt_str.replace('Z', '+00:00'))
+    except (ValueError, TypeError):
+        return None
+
+
+def _format_slice_legs(slice_data: Dict[str, Any]) -> str:
+    """Format slice segments as a compact chain with layover times.
+
+    Single segment:  '(1 segment) JFK 08:00 → LHR 12:30'
+    Multiple segments: '(2 segments) JFK 08:00 → FRA 12:30 (2h45m layover) → LHR 15:00'
+    """
+    segments = slice_data.get("segments", [])
+    if not segments:
+        return ""
+
+    n = len(segments)
+    prefix = f"({n} segment{'s' if n != 1 else ''})"
+    parts = [prefix]
+
+    # First segment origin departure
+    first = segments[0]
+    parts.append(f"{first.get('origin', {}).get('iata_code', '??')} {_format_localtime_from_iso_datetime(first.get('departing_at', ''))}")
+
+    for i, seg in enumerate(segments):
+        dest = seg.get("destination", {}).get("iata_code", "??")
+        arr_time = _format_localtime_from_iso_datetime(seg.get("arriving_at", ""))
+
+        if i < n - 1:
+            # Connection: show arr/depart times together
+            next_dep = _format_localtime_from_iso_datetime(segments[i + 1].get("departing_at", ""))
+            parts.append(f"→ {dest} {arr_time}/{next_dep}")
+
+            arr_dt = _parse_iso_datetime(seg.get("arriving_at", ""))
+            next_dep_dt = _parse_iso_datetime(segments[i + 1].get("departing_at", ""))
+            if arr_dt and next_dep_dt:
+                layover_min = int((next_dep_dt - arr_dt).total_seconds() / 60)
+                if layover_min >= 60:
+                    h, m = divmod(layover_min, 60)
+                    parts.append(f"({h}h{m}m layover)")
+                else:
+                    parts.append(f"({layover_min}m layover)")
+        else:
+            # Final destination
+            parts.append(f"→ {dest} {arr_time}")
+
+    return " ".join(parts)
+
+
 def _truncate_if_needed(content: str, data_description: str = "results") -> str:
     """Truncate content if it exceeds CHARACTER_LIMIT."""
     if len(content) > CHARACTER_LIMIT:
@@ -2012,10 +2073,9 @@ async def duffel_search_flights(params: SearchFlightsInput, ctx: Context) -> str
                 lines.append(f"- **Fare**: {_format_fare_conditions_brief(offer)}")
 
                 for j, slice_data in enumerate(offer.get("slices", []), 1):
-                    segments = slice_data.get("segments", [])
-                    if segments:
-                        duration = slice_data.get("duration", "N/A")
-                        lines.append(f"  - Slice {j}: {len(segments)} segment(s), Duration: {duration}")
+                    legs = _format_slice_legs(slice_data)
+                    if legs:
+                        lines.append(f"  - Slice {j}: {legs}")
 
                 lines.append("")
 
@@ -2129,13 +2189,9 @@ async def duffel_analyze_offers(params: AnalyzeOffersInput, ctx: Context) -> str
             lines.append(f"- **Stops**: {_count_stops(offer)}")
 
             for j, slice_data in enumerate(offer.get("slices", []), 1):
-                segments = slice_data.get("segments", [])
-                if segments:
-                    first_seg = segments[0]
-                    last_seg = segments[-1]
-                    lines.append(f"  - **Slice {j}**: {first_seg.get('origin', {}).get('iata_code', '?')} -> {last_seg.get('destination', {}).get('iata_code', '?')}")
-                    lines.append(f"    - Depart: {_format_datetime(first_seg.get('departing_at', 'N/A'))}")
-                    lines.append(f"    - Arrive: {_format_datetime(last_seg.get('arriving_at', 'N/A'))}")
+                legs = _format_slice_legs(slice_data)
+                if legs:
+                    lines.append(f"  - Slice {j}: {legs}")
 
             lines.append("")
 
