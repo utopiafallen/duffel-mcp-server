@@ -44,24 +44,18 @@ Add 3 new MCP tools to `duffel_mcp/server.py` to cover the Duffel Stays booking 
 6. Removed redundant `from datetime import` inside `duffel_flexible_search`
 7. Narrowed bare `except:` in `_handle_api_error` to specific exceptions
 
-## Tool 2: `duffel_get_stay_rates`
+## Tool 2: `duffel_get_stay_rates` ✅ DONE
 
-**Input model**: `GetStayRatesInput`
+**Commit**: `4ea7dc2` — "Add duffel_get_stay_rates tool (Tool 2)"
 
-### Fields
+**Status**: Implemented and validated (13 tools loaded, syntax OK).
 
-| Field | Type | Required | Notes |
-|-------|------|----------|-------|
-| `search_result_id` | `str` | Yes | Pattern: `^srr_` |
-| `response_format` | `ResponseFormat` | No | Default MARKDOWN |
+### What was implemented
 
-### Implementation
-
-- **Endpoint**: `POST stays/search_results/{search_result_id}/actions/fetch_all_rates` (empty body)
-- Returns full room options with rate details: room name, bed type, board type, cancellation policy, price breakdown (base/tax/fee/total), and `rate_id`
-- Markdown format: per-room summary with rate options and their `rate_id`
-- JSON format: raw API response
-- Follow the `duffel_get_offer` pattern (line 1993)
+- **1 new Pydantic model** (`server.py:813-826`): `GetStayRatesInput` with `search_result_id` (pattern `^srr_`) and `response_format`
+- **1 helper function** (`server.py:1087-1097`): `_format_board_type` — lookup dict for 5 known board types with title-case fallback
+- **Tool function** (`server.py:3078-3298`): `duffel_get_stay_rates` with full markdown + JSON output
+- **Markdown output**: accommodation overview (name, ★ rating, reviews, location, check-in times, brand, loyalty) → stay dates + expiry → per-room breakdown (bed config, photos) → per-rate details (rate_id, board type, payment type, full price breakdown, cancellation policy, availability, conditions limited to 5, loyalty, description)
 
 ## Tool 3: `duffel_book_stay`
 
@@ -91,7 +85,7 @@ Add 3 new MCP tools to `duffel_mcp/server.py` to cover the Duffel Stays booking 
 
 Place after line 634 (after `CreateCheckoutInput`, before `CheckoutSession`):
 
-### ✅ Already implemented (`server.py:636-772`)
+### ✅ Already implemented (`server.py:636-826`)
 
 ```python
 class StaysGuestInput(BaseModel):
@@ -130,9 +124,14 @@ class SearchStaysInput(BaseModel):
     @model_validator(mode='after')
     def validate_rating_range(self) -> 'SearchStaysInput':
         ...  # enforce min_rating <= max_rating when both set
+
+class GetStayRatesInput(BaseModel):
+    """Input model for fetching stay rates."""
+    search_result_id: str = Field(..., pattern=r"^srr_")
+    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
 ```
 
-### ⏳ Still needed (for tools 2-3)
+### ⏳ Still needed (for Tool 3)
 
 ```python
 class StayGuestDetailInput(BaseModel):
@@ -141,10 +140,6 @@ class StayGuestDetailInput(BaseModel):
     family_name: str
     born_on: Optional[str] = None  # YYYY-MM-DD
     user_id: Optional[str] = None  # Duffel customer ID
-
-class GetStayRatesInput(BaseModel):
-    search_result_id: str = Field(..., pattern=r"^srr_")
-    response_format: ResponseFormat = Field(default=ResponseFormat.MARKDOWN)
 
 class BookStayInput(BaseModel):
     rate_id: str = Field(..., pattern=r"^rat_")
@@ -159,9 +154,10 @@ class BookStayInput(BaseModel):
 
 | Addition | Location | Status |
 |----------|----------|--------|
-| New input models (4) | After line 634 (`server.py:636-772`) | ✅ Done |
-| `duffel_search_stays` tool | After `duffel_list_airlines` (`server.py:2854-3139`) | ✅ Done |
-| `duffel_get_stay_rates` tool | Immediately after search stays | ⏳ Pending |
+| Pydantic models (4 for tools 1-2) | After line 634 (`server.py:636-826`) | ✅ Done |
+| `_format_board_type` helper | After `_format_price` (`server.py:1087-1097`) | ✅ Done |
+| `duffel_search_stays` tool | After `duffel_list_airlines` (`server.py:2927-3204`) | ✅ Done |
+| `duffel_get_stay_rates` tool | Immediately after search stays (`server.py:3078-3298`) | ✅ Done |
 | `duffel_book_stay` tool | Immediately after get stay rates | ⏳ Pending |
 
 ## Key Differences from Flight Tools
@@ -183,7 +179,7 @@ uv run python -c "import asyncio, duffel_mcp.server; m = duffel_mcp.server.mcp; 
 
 Test with Duffel's test hotel in London (lat 51.5071, lon -0.1416) using a sandbox API key. Verify both markdown and JSON response formats for each tool.
 
-**Note**: Tool 1 (`duffel_search_stays`) is already validated at 12 tools. Tools 2-3 will bring the total to 14.
+**Note**: Tools 1-2 are validated at 13 tools. Tool 3 will bring the total to 14.
 
 ## Out of Scope (Future)
 
