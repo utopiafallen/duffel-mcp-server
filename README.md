@@ -7,18 +7,20 @@ A Model Context Protocol (MCP) server for the Duffel travel API. This server ena
 ### Flight Tools
 
 1. **duffel_search_flights** - Search for flights with optimization
-    - One-way and round-trip searches
+    - One-way, round-trip, and multi-city searches
     - Multiple passengers support
     - Cabin class preferences
     - Connection filters (non-stop, max connections)
     - **Optimization strategies**: cheapest, fastest, best, least_stops, earliest, latest
     - **Weighted scoring** for finding optimal flights
+    - Multi-segment flights show each leg with airports, local times, and layover durations
 
 2. **duffel_analyze_offers** - Analyze and rank offers from a search
     - Apply optimization strategies post-search
     - Custom weight configuration for price, duration, stops, departure time
     - Market overview with price/duration ranges
     - Scored rankings for easy comparison
+    - Multi-segment flights show each leg with airports, times, and layovers
 
 3. **duffel_get_offer** - Get detailed, up-to-date offer information
     - Latest pricing
@@ -63,6 +65,13 @@ A Model Context Protocol (MCP) server for the Duffel travel API. This server ena
     - Star rating filters (client-side, unrated treated as 1-star)
     - Cancellation and payment type filters
     - **Optimization strategies**: cheapest, best_reviewed, most_reviewed, recommended
+
+13. **duffel_get_stay_rates** - Get detailed room rates for a search result
+    - Room and bed type details
+    - Price breakdown (base, taxes, fees)
+    - Cancellation policy and deadline
+    - Board type (meal plan) information
+    - Returns `rate_id` for booking
 
 ### Resources
 
@@ -149,10 +158,10 @@ Customize weights with the `optimization_weights` parameter:
 
 ```bash
 # Install with uv
-uv pip install -e .
+uv pip install -e duffel_mcp/
 
 # Or with pip
-pip install -e .
+pip install -e duffel_mcp/
 ```
 
 ## Configuration
@@ -330,7 +339,7 @@ Deploy as a hosted SSE server:
 | Railway | Connect GitHub repo at railway.app |
 | Render | Connect GitHub repo at render.com |
 | Fly.io | `fly launch && fly secrets set DUFFEL_API_KEY_LIVE=xxx` |
-| Docker | `docker build -t duffel-mcp . && docker run -p 8000:8000 -e DUFFEL_API_KEY_LIVE=xxx duffel-mcp` |
+| Docker | `docker build -t duffel-mcp . && docker run -p 8080:8080 -e DUFFEL_API_KEY_LIVE=xxx duffel-mcp` |
 
 Once deployed, connect to your server at `https://your-app.railway.app/sse`
 
